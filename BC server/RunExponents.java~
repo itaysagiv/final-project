@@ -333,7 +333,7 @@ public class RunExponents {
 		//}
 		while (true) {
 			Start = System.nanoTime();
-			System.out.println("Decryption Started");
+			System.out.println("Decryption Started itay");
 			Result = Data.modPow(TwoWindowKey, Modulu);
 			System.out.println("Decryption Ended.");
 			End = System.nanoTime();
