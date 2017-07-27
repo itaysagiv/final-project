@@ -1,0 +1,14 @@
+# generate 10000 keys and save in 4096_keys.txt
+rm 4096_keys.txt -f
+for (( i = 0 ; i < $1; i++ ))
+do
+  echo "number $i"
+  rm tmp_key.txt -f
+  ssh-keygen -t rsa -b 4096 -f tmp_key.txt -P "" 
+  echo "private key number $i" >> 4096_keys.txt
+  cat 4096_keys.txt tmp_key.txt >> tmp_keys.txt
+  rm 4096_keys.txt -f
+  cat tmp_keys.txt >> 4096_keys.txt 
+  rm tmp_keys.txt -f
+done
+rm temp_key.txt -f

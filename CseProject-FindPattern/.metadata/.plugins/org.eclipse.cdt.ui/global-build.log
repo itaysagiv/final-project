@@ -1,0 +1,56 @@
+11:02:24 **** Incremental Build of configuration Debug for project FillingTheCache ****
+make all 
+Building file: ../EvictionSet.c
+Invoking: GCC C Compiler
+gcc -O0 -g3 -Wall -c -fmessage-length=0 -MMD -MP -MF"EvictionSet.d" -MT"EvictionSet.d" -o "EvictionSet.o" "../EvictionSet.c"
+../EvictionSet.c: In function ‘LookForPatternInSet’:
+../EvictionSet.c:1442:6: warning: unused variable ‘BadBitsNum’ [-Wunused-variable]
+  int BadBitsNum = 0;
+      ^
+../EvictionSet.c:1441:6: warning: unused variable ‘LastBitEnd’ [-Wunused-variable]
+  int LastBitEnd = 0;
+      ^
+../EvictionSet.c:1440:6: warning: unused variable ‘LastIndex’ [-Wunused-variable]
+  int LastIndex = -1;
+      ^
+../EvictionSet.c:1439:6: warning: unused variable ‘CurrZeroIdx’ [-Wunused-variable]
+  int CurrZeroIdx = 0;
+      ^
+../EvictionSet.c:1438:6: warning: unused variable ‘CurrOnesIdx’ [-Wunused-variable]
+  int CurrOnesIdx = 0;
+      ^
+../EvictionSet.c:1141:19: warning: unused variable ‘ZerosNum’ [-Wunused-variable]
+  int OnesNum = 0, ZerosNum = 0;
+                   ^
+../EvictionSet.c:1141:6: warning: unused variable ‘OnesNum’ [-Wunused-variable]
+  int OnesNum = 0, ZerosNum = 0;
+      ^
+../EvictionSet.c: In function ‘ExtractKeyFromSet’:
+../EvictionSet.c:1622:4: warning: implicit declaration of function ‘usleep’ [-Wimplicit-function-declaration]
+    usleep(500000);
+    ^
+../EvictionSet.c:1632:4: warning: implicit declaration of function ‘sleep’ [-Wimplicit-function-declaration]
+    sleep(3);
+    ^
+../EvictionSet.c:1604:7: warning: unused variable ‘row’ [-Wunused-variable]
+   int row;
+       ^
+../EvictionSet.c: In function ‘successBitRatio’:
+../EvictionSet.c:2033:18: warning: unused variable ‘i’ [-Wunused-variable]
+  int sampleKey_i,i;
+                  ^
+../EvictionSet.c: In function ‘RsaToStringBits’:
+../EvictionSet.c:2076:2: warning: excess elements in array initializer [enabled by default]
+  static const char bytesInBinary[15][5]={"0000","0001","0010","0011","0100","0101","0110","0111","1000","1001","1010","1011","1100","1101","1110","1111"};
+  ^
+../EvictionSet.c:2076:2: warning: (near initialization for ‘bytesInBinary’) [enabled by default]
+../EvictionSet.c:2083:4: warning: implicit declaration of function ‘htonl’ [-Wimplicit-function-declaration]
+    strcat(RsaKeyAsBits,bytesInBinary[(mask&((unsigned int)htonl(RsaKeys[ByteInKey])))>>i]);
+    ^
+Finished building: ../EvictionSet.c
+ 
+Building target: FillingTheCache
+Invoking: GCC C Linker
+gcc  -o "FillingTheCache"  ./.metadata/.plugins/org.eclipse.cdt.managedbuilder.core/spec.o  ./.metadata/.plugins/org.eclipse.cdt.make.core/specs.o  ./CacheFuncs.o ./EvictionSet.o ./Probe.o ./main.o   -lssl -lm -lcrypto -lgmp
+Finished building target: FillingTheCache
+ 

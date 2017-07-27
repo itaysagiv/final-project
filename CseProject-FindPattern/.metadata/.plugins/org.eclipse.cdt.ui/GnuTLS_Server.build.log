@@ -1,0 +1,11 @@
+14:44:15 **** Incremental Build of configuration Debug for project GnuTLS_Server ****
+make all 
+Building target: GnuTLS_Server
+Invoking: GCC C Linker
+gcc -L/home/kaplan/libs/nettle-3.1 -o "GnuTLS_Server"  ./server.o   -lgnutls -lnettle
+/usr/bin/ld: cannot find -lnettle
+collect2: error: ld returned 1 exit status
+make: *** [GnuTLS_Server] Error 1
+
+14:44:15 Build Finished (took 95ms)
+

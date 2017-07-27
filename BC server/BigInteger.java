@@ -1689,21 +1689,22 @@ public class BigInteger extends Number implements Comparable<BigInteger> {
         int[] mod = z.mag;
         int modLen = mod.length;
         
-        
+
+	        
         // Select an appropriate window size
         int wbits = 0;
         int ebits = bitLength(exp, exp.length);
+	/********************************** WINDOW SIZE ************************************
         // if exponent is 65537 (0x10001), use minimum window size
         if ((ebits != 17) || (exp[0] != 65537)) {
             while (ebits > bnExpModThreshTable[wbits]) {
                 wbits++;
             }
         }
-        
-        // Hardcoded windows size 
-        //wbits = 3;
-
-        // **** WINDOW SIZE ******
+	/***********************************************************************************/
+	wbits = 3;
+	
+	
         // Calculate appropriate table size
         int tblmask = 1 << wbits;
 
@@ -1748,15 +1749,18 @@ public class BigInteger extends Number implements Comparable<BigInteger> {
         for(int i=0; i<modLen; i++)
             t[i] = b[i];
 
+	/*******************Pre-Proccessing Phase Loop ********************************/
         // Fill in the table with odd powers of the base
         for (int i=1; i<tblmask; i++) {
             int[] prod = multiplyToLen(t, modLen, table[i-1], modLen, null);
             table[i] = montReduce(prod, mod, modLen, inv);
+	    
             multNumPrecomputed++;
         }
+	/******************************************************************************/
         
         // Debug code - count the number of multiplies during table precomputation
-        System.out.println("Precomputation MultNum: " + multNumPrecomputed);
+        System.out.println("Num of pre-calculated values: " + multNumPrecomputed);
 
         // Pre load the window that slides over the exponent
         int bitpos = 1 << ((ebits-1) & (32-1));

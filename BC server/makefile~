@@ -6,6 +6,10 @@ JC = javac
 
 CLASSES = \
 	RunExponents.java \
+	RSACoreEngine.java \
+	BigInteger.java \
+	MutableBigInteger \
+	SignedMutableBigInteger.class
 
 default: classes
 

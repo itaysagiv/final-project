@@ -7,8 +7,8 @@
 #include <string.h>
 #include <sys/shm.h>
 
-#include "CacheTools/EvictionSet.h"
-#include "CacheTools/SharedData.h"
+#include "EvictionSet.h"
+#include "SharedData.h"
 
 #define MIN_ALLOWED_VARIANCE 200
 #define SAMPLED_KEYS_PER_WINDOW 10

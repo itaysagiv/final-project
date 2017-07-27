@@ -1,0 +1,86 @@
+
+#ifndef EVICTION_SET_H
+#define EVICTION_SET_H
+
+#include "CacheDefs.h"
+#include <stdint.h>
+
+#define BITS_IN_CHAR 8
+#define DEMO 1
+
+
+#define MAX_HANDLED_EXTRA_BITS 30
+typedef struct Cache_Line_Node {
+	struct Cache_Line_Node* pNext;
+	Cache_Line* pLine;
+}Cache_Line_Node;
+extern int MAX_WRONG_ONES;
+extern int MAX_WRONG_ZEROS;
+extern int NUMBER_OF_KEYS_TO_SAMPLE;
+extern int PATTERN_LEN;
+extern char* RsaKeys[];
+
+/**
+ * This function gets a buffer of type LinesBuffer, and uses its lines to
+ * map a cache eviction set.
+ * I.E. A set of memory lines, sorted into sets, which will allow to rewrite the
+ * entire cache.
+ *
+ * The found cache sets will be saved to the given Cache_Mapping pointer.
+ *
+ * Returns the number of cache sets which were found.
+ */
+int CreateEvictionSetFromBuff(LinesBuffer* pBuffer, Cache_Mapping* pEvictionSets);
+
+/**
+ * Same as CreateEvictionSetFromBuff, but this time takes a pointer to a chunk of memory
+ * and its size, instead of a struct.
+ */
+int CreateEvictionSetFromMem(char* Memory, uint32_t Size, Cache_Mapping* pCacheSets);
+
+/**
+ * This function is not neccesary for the attack, but it is usefull for getting some
+ * statistics over the cache when analyzing the cache behaviour of a new library.
+ *
+ * Gets a cache mapping, and fills the found statistics into the give Cache_Statistics
+ * pointer.
+ */
+void GetMemoryStatistics(Cache_Mapping* pEvictionSets, Cache_Statistics* pCacheStats);
+
+/**
+ * Helper function for when we want to save our statistics to a file for later review.
+ */
+void WriteStatisticsToFile(Cache_Statistics* pCacheStats, char* pFileName, int Sorted);
+
+/*
+ * For a given set of lines, sample it for SamplesNum samples, and look for patterns
+ * in it matching the behavior of the attacked library.
+ *
+ * Also needs to be given how does a zero and a one bit in the exponent looks in the
+ * attackers cache usage.
+ *
+ * Can save the samples to a file for later review if file name is given.
+ *
+ * Returns the score of the set - a numerical value denoting how many patterns were
+ * found among the samples, and how clean/noisy they were.
+ */
+int RatePatternsInSet(Cache_Set* pSet, char OnesPattern[], char ZerosPattern[], int PatternBitsNum, int SamplesNum, char *FileName, int FindPattern, int ScoreArr[PATTERN_LEN + 1][PATTERN_LEN + 1]);
+
+/**
+ * Given a set we suspect sees decryption, sample it for KeysToSamples decryption
+ * operations, then try and decypher the full key out of the keys we've sampled.
+ *
+ * Returns the found key in full binary.
+ */
+__always_inline char* ExtractKeyFromSet(Cache_Set* pSet, char OnesPattern[], char ZerosPattern[], int PatternBitsNum, int KeysToSample, char RsaKey[KEYS_LEN_IN_BITS / 8]);
+
+/**
+ * Function for converting a string represented key to a binary representation.
+ */
+char* StringToBuff(char* String);
+
+//Yakir & Naama functions
+
+void RsaToStringBits(char RsaKey[KEYS_LEN_IN_BITS / 8],char RsaKeyAsBits[KEYS_LEN_IN_BITS]);
+void successBitRatio(char SampledKeys[][KEYS_LEN_IN_BITS + MAX_HANDLED_EXTRA_BITS],int KeysNum,int KeySkipIndex[], char RsaKey[KEYS_LEN_IN_BITS / 8]);
+#endif
