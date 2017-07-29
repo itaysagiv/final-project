@@ -234,7 +234,7 @@ public class RunExponents {
 		System.out.println("4. Mixed key");
 		int choice = reader.nextInt();
 		int c=0;
-		//while (true) {
+		while (true) {
 			c++;
 			System.out.println("Iteration #"+c);
 			Start = System.nanoTime();
@@ -251,7 +251,7 @@ public class RunExponents {
 			} catch (Exception e) {
 				System.out.println("Sleep interrupted!");
 			}
-		//}
+		}
 	}
 
 }
